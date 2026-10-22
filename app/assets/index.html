@@ -118,6 +118,9 @@ function saveDisabled(set) {
   A.saveDisabled(arr.join('\n') + (arr.length ? '\n' : ''));
 }
 
+/* 带过滤器的源用它自己的 key，否则同一个 URL 的多个源无法分别开关 */
+function srcKey(s) { return s.filter ? (s.url + '|' + s.filter) : s.url; }
+
 /* ---- 结果回调（Java 侧异步调用） ---- */
 window.__onResult = function (kind, text) {
   setBusy(false);
@@ -215,10 +218,11 @@ function renderSources() {
     sw.className = 'sw';
     var cb = document.createElement('input');
     cb.type = 'checkbox';
-    cb.checked = !disabled.has(src.url);
+    var key = srcKey(src);
+    cb.checked = !disabled.has(key);
     cb.addEventListener('change', function () {
       var d = loadDisabled();
-      if (cb.checked) { d.delete(src.url); } else { d.add(src.url); }
+      if (cb.checked) { d.delete(key); } else { d.add(key); }
       saveDisabled(d);
     });
     var knob = document.createElement('i');

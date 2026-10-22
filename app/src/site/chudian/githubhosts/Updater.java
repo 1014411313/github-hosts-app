@@ -2,6 +2,7 @@ package site.chudian.githubhosts;
 
 import android.content.Context;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
@@ -127,7 +128,7 @@ public final class Updater {
         long t0 = System.currentTimeMillis();
         File dir = ctx.getFilesDir();
 
-        List<String> urls = extractUrls(readText(new File(dir, FILE_SOURCES)));
+        List<Source> sources = parseSources(readText(new File(dir, FILE_SOURCES)));
         Set<String> disabled = new HashSet<String>();
         for (String line : readText(new File(dir, FILE_DISABLED)).split("\n")) {
             String s = line.trim();
@@ -136,35 +137,48 @@ public final class Updater {
             }
         }
 
-        List<String> active = new ArrayList<String>();
-        for (String url : urls) {
-            if (!disabled.contains(url)) {
-                active.add(url);
+        List<Source> active = new ArrayList<Source>();
+        List<String> uniqueUrls = new ArrayList<String>();
+        for (Source s : sources) {
+            if (disabled.contains(s.key())) {
+                continue;
+            }
+            active.add(s);
+            if (!uniqueUrls.contains(s.url)) {
+                uniqueUrls.add(s.url);
             }
         }
 
-        // 并行下载，每个源内部还会自动尝试镜像
-        String[] bodies = downloadAll(active);
+        // 同一个 URL 只下载一次；多个源可以共用它但各设不同的过滤器
+        String[] bodies = downloadAll(uniqueUrls);
+        LinkedHashMap<String, String> bodyByUrl = new LinkedHashMap<String, String>();
+        for (int i = 0; i < uniqueUrls.size(); i++) {
+            bodyByUrl.put(uniqueUrls.get(i), bodies[i]);
+        }
 
         LinkedHashMap<String, String> byDomain = new LinkedHashMap<String, String>();
         int total = active.size();
         int ok = 0;
-        for (int i = 0; i < active.size(); i++) {
-            if (bodies[i] == null) {
-                appendLog(ctx, "下载失败: " + active.get(i));
+        for (Source s : active) {
+            String body = bodyByUrl.get(s.url);
+            if (body == null) {
+                appendLog(ctx, "下载失败: " + s.url);
                 continue;
             }
             ok++;
-            for (String line : bodies[i].split("\n")) {
-                String s = line.trim();
-                if (s.isEmpty() || s.charAt(0) == '#') {
+            for (String line : body.split("\n")) {
+                String t = line.trim();
+                if (t.isEmpty() || t.charAt(0) == '#') {
                     continue;
                 }
-                String[] parts = s.split("\\s+");
+                String[] parts = t.split("\\s+");
                 if (parts.length < 2 || !isIp(parts[0])) {
                     continue;
                 }
                 String domain = parts[1];
+                if (!s.matches(domain)) {
+                    continue;
+                }
                 if (!byDomain.containsKey(domain)) {
                     byDomain.put(domain, parts[0] + " " + domain);
                 }
@@ -250,6 +264,62 @@ public final class Updater {
         Matcher m = URL_PATTERN.matcher(json == null ? "" : json);
         while (m.find()) {
             list.add(m.group(1));
+        }
+        return list;
+    }
+
+    /** 一个源：名称、地址、可选的域名过滤器（逗号分隔，任一命中即保留） */
+    static final class Source {
+        String name = "";
+        String url = "";
+        String filter = "";
+
+        String key() {
+            return filter.isEmpty() ? url : url + "|" + filter;
+        }
+
+        boolean matches(String domain) {
+            if (filter.isEmpty()) {
+                return true;
+            }
+            String d = domain.toLowerCase();
+            for (String raw : filter.toLowerCase().split(",")) {
+                String k = raw.trim();
+                if (k.isEmpty()) {
+                    continue;
+                }
+                if (k.startsWith("=")) {
+                    // =t.me 表示域名等于 t.me 或它的子域，避免子串误命中（如 chat.messenger.com）
+                    String v = k.substring(1);
+                    if (d.equals(v) || d.endsWith("." + v)) {
+                        return true;
+                    }
+                } else if (d.contains(k)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    static List<Source> parseSources(String json) {
+        List<Source> list = new ArrayList<Source>();
+        try {
+            JSONArray arr = new JSONArray(json == null ? "[]" : json);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) {
+                    continue;
+                }
+                Source s = new Source();
+                s.name = o.optString("name", "");
+                s.url = o.optString("url", "");
+                s.filter = o.optString("filter", "");
+                if (!s.url.isEmpty()) {
+                    list.add(s);
+                }
+            }
+        } catch (Exception ignored) {
         }
         return list;
     }
